@@ -1,30 +1,26 @@
 # ===================== 导入依赖库 =====================
 import os
-import sys
-import yaml
-import numpy as np
-from ultralytics import YOLO
-import torch
 import traceback
+
+import torch
+import yaml
+
+from ultralytics import YOLO
 
 # ===================== 核心：EW-MPDIoU 算法实现 =====================
 
+
 def ew_mpdiou(pred_boxes, target_boxes, xywh=True, eps=1e-7):
-    """
-    Edge-Weighted Minimum Point Distance IoU (EW-MPDIoU)
+    """Edge-Weighted Minimum Point Distance IoU (EW-MPDIoU).
 
     公式: EW-MPDIoU = IoU - w1 * d1^2 / c^2 - w2 * d2^2 / c^2
 
-    d1 = 预测框与GT框左上角之间的欧氏距离
-    d2 = 预测框与GT框右下角之间的欧氏距离
-    c  = 最小包围框对角线长度
-    w1, w2 = 基于GT框宽高比的边缘感知权重 (w1 + w2 = 2)
+    d1 = 预测框与GT框左上角之间的欧氏距离 d2 = 预测框与GT框右下角之间的欧氏距离 c = 最小包围框对角线长度 w1, w2 = 基于GT框宽高比的边缘感知权重 (w1 + w2 = 2)
 
-    对于宽框(w > h): w2 > 1 → 右下角惩罚更大 → x方向定位更精确
-    对于高框(h > w): w1 > 1 → 左上角惩罚更大 → y方向定位更精确
+    对于宽框(w > h): w2 > 1 → 右下角惩罚更大 → x方向定位更精确 对于高框(h > w): w1 > 1 → 左上角惩罚更大 → y方向定位更精确
 
     Args:
-        pred_boxes:  (N, 4) 预测框
+        pred_boxes: (N, 4) 预测框
         target_boxes: (N, 4) GT框
         xywh: True=(x,y,w,h), False=(x1,y1,x2,y2)
         eps: 防止除零
@@ -48,8 +44,9 @@ def ew_mpdiou(pred_boxes, target_boxes, xywh=True, eps=1e-7):
         w2, h2 = b2_x2 - b2_x1, b2_y2 - b2_y1 + eps
 
     # 交集面积
-    inter = (b1_x2.minimum(b2_x2) - b1_x1.maximum(b2_x1)).clamp_(0) * \
-            (b1_y2.minimum(b2_y2) - b1_y1.maximum(b2_y1)).clamp_(0)
+    inter = (b1_x2.minimum(b2_x2) - b1_x1.maximum(b2_x1)).clamp_(0) * (
+        b1_y2.minimum(b2_y2) - b1_y1.maximum(b2_y1)
+    ).clamp_(0)
 
     # 并集面积
     area1 = (b1_x2 - b1_x1) * (b1_y2 - b1_y1)
@@ -89,9 +86,7 @@ _original_forward = None  # 备份，用于恢复
 
 
 def patch_bbox_loss():
-    """
-    运行时替换 BboxLoss.forward()，将 CIoU 替换为 EW-MPDIoU。
-    在 model.train() 之前调用即可，不修改任何 ultralytics 源码。
+    """运行时替换 BboxLoss.forward()，将 CIoU 替换为 EW-MPDIoU。 在 model.train() 之前调用即可，不修改任何 ultralytics 源码。.
     """
     global _original_forward
     from ultralytics.utils.loss import BboxLoss
@@ -103,9 +98,10 @@ def patch_bbox_loss():
 
     _original_forward = BboxLoss.forward
 
-    def ew_forward(self, pred_dist, pred_bboxes, anchor_points, target_bboxes,
-                   target_scores, target_scores_sum, fg_mask):
-        """使用 EW-MPDIoU 的 BboxLoss forward"""
+    def ew_forward(
+        self, pred_dist, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask
+    ):
+        """使用 EW-MPDIoU 的 BboxLoss forward."""
         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
         iou = ew_mpdiou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False)
         loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
@@ -113,9 +109,7 @@ def patch_bbox_loss():
         # DFL 损失保持不变
         if self.dfl_loss:
             target_ltrb = bbox2dist(anchor_points, target_bboxes, self.dfl_loss.reg_max - 1)
-            loss_dfl = self.dfl_loss(
-                pred_dist[fg_mask].view(-1, self.dfl_loss.reg_max), target_ltrb[fg_mask]
-            ) * weight
+            loss_dfl = self.dfl_loss(pred_dist[fg_mask].view(-1, self.dfl_loss.reg_max), target_ltrb[fg_mask]) * weight
             loss_dfl = loss_dfl.sum() / target_scores_sum
         else:
             loss_dfl = torch.tensor(0.0).to(pred_dist.device)
@@ -127,12 +121,13 @@ def patch_bbox_loss():
 
 
 def restore_bbox_loss():
-    """恢复原始的 CIoU BboxLoss"""
+    """恢复原始的 CIoU BboxLoss."""
     global _original_forward
     if _original_forward is None:
         print("[EW-MPDIoU] 没有 patch 记录，无需恢复")
         return
     from ultralytics.utils.loss import BboxLoss
+
     BboxLoss.forward = _original_forward
     _original_forward = None
     print("[EW-MPDIoU] BboxLoss.forward 已恢复为原始 CIoU")
@@ -140,8 +135,9 @@ def restore_bbox_loss():
 
 # ===================== 数据集配置 =====================
 
+
 def create_data_yaml(data_dir="datasets/icon"):
-    """自动扫描标签文件，生成YOLO数据集配置文件"""
+    """自动扫描标签文件，生成YOLO数据集配置文件."""
     train_labels_dir = os.path.join(data_dir, "labels/train")
     val_labels_dir = os.path.join(data_dir, "labels/val")
 
@@ -150,26 +146,26 @@ def create_data_yaml(data_dir="datasets/icon"):
     for labels_dir in [train_labels_dir, val_labels_dir]:
         if os.path.exists(labels_dir):
             for label_file in os.listdir(labels_dir):
-                if label_file.endswith('.txt'):
-                    with open(os.path.join(labels_dir, label_file), 'r') as f:
+                if label_file.endswith(".txt"):
+                    with open(os.path.join(labels_dir, label_file)) as f:
                         for line in f:
                             parts = line.strip().split()
                             if parts:
                                 all_class_ids.add(int(parts[0]))
 
     print(f"检测到的类别ID: {sorted(list(all_class_ids))}")
-    class_names = {class_id: f'class_{class_id}' for class_id in sorted(all_class_ids)}
+    class_names = {class_id: f"class_{class_id}" for class_id in sorted(all_class_ids)}
 
     data_config = {
-        'path': data_dir,
-        'train': 'images/train',
-        'val': 'images/val',
-        'names': class_names,
-        'nc': len(class_names)
+        "path": data_dir,
+        "train": "images/train",
+        "val": "images/val",
+        "names": class_names,
+        "nc": len(class_names),
     }
 
     yaml_path = os.path.join(data_dir, "data.yaml")
-    with open(yaml_path, 'w') as f:
+    with open(yaml_path, "w") as f:
         yaml.dump(data_config, f, default_flow_style=False)
 
     print(f"配置文件已生成: {yaml_path}")
@@ -178,18 +174,14 @@ def create_data_yaml(data_dir="datasets/icon"):
 
 # ===================== 核心训练 =====================
 
+
 def train_yolo11n_ew():
-    """
-    基于 test.py 最优配置 + EW-MPDIoU 损失函数。
-    适配 640x320 非正方形图标、小样本、Windows 环境。
+    """基于 test.py 最优配置 + EW-MPDIoU 损失函数。 适配 640x320 非正方形图标、小样本、Windows 环境。.
     """
     data_dir = "datasets/icon"
 
     # 自动创建目录结构
-    required_dirs = [
-        os.path.join(data_dir, f"{a}/{b}")
-        for a in ["images", "labels"] for b in ["train", "val"]
-    ]
+    required_dirs = [os.path.join(data_dir, f"{a}/{b}") for a in ["images", "labels"] for b in ["train", "val"]]
     for dir_path in required_dirs:
         os.makedirs(dir_path, exist_ok=True)
 
@@ -206,52 +198,52 @@ def train_yolo11n_ew():
 
     # 加载模型
     print("加载YOLOv11n模型 (EW-MPDIoU)...")
-    model = YOLO('yolo11n.pt')
+    model = YOLO("yolo11n.pt")
 
     # 训练参数 (基于 test.py 最优配置)
     train_args = {
-        'data': data_yaml,
-        'epochs': 300,
-        'batch': 32,
-        'imgsz': 640,
-        'rect': True,
-        'workers': 0,
-        'device': '0' if torch.cuda.is_available() else 'cpu',
-        'seed': 42,
-        'pretrained': True,
-        'optimizer': 'AdamW',
-        'freeze': 10,
-        'cache': True,
-        'patience': 100,
-        'amp': True,
-        'verbose': True,
-        'save': True,
-        'save_period': 10,
-        'name': 'yolo11n_ew_mpdiou',
-        'exist_ok': True,
-        'box': 10.0,
-        'cls': 1.0,
-        'dfl': 1.5,
-        'lr0': 0.001,
-        'lrf': 0.01,
-        'warmup_epochs': 8.0,
-        'weight_decay': 0.0005,
-        'close_mosaic': 20,
-        'resume': False,
-        'mosaic': 0.3,
-        'degrees': 0,
-        'scale': 0.1,
-        'translate': 0.05,
-        'hsv_h': 0.005,
-        'hsv_s': 0.2,
-        'hsv_v': 0.2,
-        'fliplr': 0.0,
+        "data": data_yaml,
+        "epochs": 300,
+        "batch": 32,
+        "imgsz": 640,
+        "rect": True,
+        "workers": 0,
+        "device": "0" if torch.cuda.is_available() else "cpu",
+        "seed": 42,
+        "pretrained": True,
+        "optimizer": "AdamW",
+        "freeze": 10,
+        "cache": True,
+        "patience": 100,
+        "amp": True,
+        "verbose": True,
+        "save": True,
+        "save_period": 10,
+        "name": "yolo11n_ew_mpdiou",
+        "exist_ok": True,
+        "box": 10.0,
+        "cls": 1.0,
+        "dfl": 1.5,
+        "lr0": 0.001,
+        "lrf": 0.01,
+        "warmup_epochs": 8.0,
+        "weight_decay": 0.0005,
+        "close_mosaic": 20,
+        "resume": False,
+        "mosaic": 0.3,
+        "degrees": 0,
+        "scale": 0.1,
+        "translate": 0.05,
+        "hsv_h": 0.005,
+        "hsv_s": 0.2,
+        "hsv_v": 0.2,
+        "fliplr": 0.0,
     }
 
-    print(f"\n{'='*50}")
-    print(f"EW-MPDIoU 训练配置")
-    print(f"损失函数: EW-MPDIoU (Edge-Weighted MPDIoU)")
-    print(f"{'='*50}")
+    print(f"\n{'=' * 50}")
+    print("EW-MPDIoU 训练配置")
+    print("损失函数: EW-MPDIoU (Edge-Weighted MPDIoU)")
+    print(f"{'=' * 50}")
 
     try:
         results = model.train(**train_args)
@@ -262,7 +254,7 @@ def train_yolo11n_ew():
         print(f"\n训练完成！mAP50: {metrics.box.map50:.4f}")
 
         # 导出 ONNX
-        best_model.export(format='onnx', imgsz=640, simplify=True)
+        best_model.export(format="onnx", imgsz=640, simplify=True)
         print("ONNX 模型已导出")
 
         return results
@@ -278,12 +270,12 @@ def train_yolo11n_ew():
 
 # ===================== 环境检查 =====================
 
+
 def check_environment():
     print("检查环境...")
     print(f"PyTorch: {torch.__version__} | CUDA: {torch.cuda.is_available()}")
     try:
-        import ultralytics
-        YOLO('yolo11n.pt')
+        YOLO("yolo11n.pt")
         print("环境正常！")
         return True
     except Exception:
@@ -293,15 +285,16 @@ def check_environment():
 
 # ===================== 标签检查修复 =====================
 
+
 def check_dataset_labels(data_dir="datasets/icon"):
     print("\n检查标签格式...")
     for split in ["train", "val"]:
         label_dir = os.path.join(data_dir, f"labels/{split}")
         if os.path.exists(label_dir):
             for f in os.listdir(label_dir):
-                if f.endswith('.txt'):
+                if f.endswith(".txt"):
                     path = os.path.join(label_dir, f)
-                    with open(path, 'r+') as file:
+                    with open(path, "r+") as file:
                         lines = [l for l in file.readlines() if len(l.strip().split()) >= 5]
                         file.seek(0)
                         file.writelines(lines)
