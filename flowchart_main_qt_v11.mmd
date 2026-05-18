@@ -1,0 +1,81 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#e8f0fe', 'primaryTextColor': '#1a1a2e', 'primaryBorderColor': '#2f80ed', 'lineColor': '#5f6b7a', 'secondaryColor': '#f0f4f8', 'tertiaryColor': '#ffffff'}}}%%
+
+flowchart TD
+    START(["程序启动"]) --> INIT["初始化主窗口界面"]
+    INIT --> LAYOUT["界面分为左右两个区域"]
+    LAYOUT --> LEFT["左侧：图像显示区<br/>+ 操作按钮"]
+    LAYOUT --> RIGHT["右侧：区间信息<br/>+ 定位状态<br/>+ 记录表格<br/>+ 运行日志"]
+
+    LEFT --> BTN_AREA["操作按钮区域<br/>━━━━━━━━━━<br/>选择YOLO权重文件<br/>选择图像文件夹<br/>开始检测<br/>停止检测<br/>清空表格<br/>导出CSV"]
+
+    BTN_AREA --> USER_CHOOSE{"用户操作"}
+
+    USER_CHOOSE -->|"选择权重"| SEL_MODEL["弹出文件对话框<br/>选择 .pt / .onnx 模型文件"]
+    USER_CHOOSE -->|"选择文件夹"| SEL_FOLDER["弹出文件夹对话框<br/>选择待检测图像所在目录"]
+    USER_CHOOSE -->|"点击开始"| START_CHECK{"模型和文件夹<br/>都已选择？"}
+    USER_CHOOSE -->|"点击停止"| STOP_SIGNAL["发出停止指令<br/>通知检测线程退出循环"]
+    USER_CHOOSE -->|"点击清空"| CLEAR_ALL["清空记录表格<br/>清空运行日志"]
+    USER_CHOOSE -->|"点击导出"| EXPORT_CSV["弹出保存对话框<br/>将表格内容写入CSV文件"]
+
+    SEL_MODEL --> UPDATE_HINT["界面底部更新<br/>显示已选模型路径"]
+    SEL_FOLDER --> UPDATE_HINT
+
+    START_CHECK -->|"未选择完整"| POP_WARN["弹出提示框<br/>请先选择模型和文件夹"]
+    START_CHECK -->|"已选择完整"| CHECK_RUNNING{"已有检测<br/>正在运行？"}
+    CHECK_RUNNING -->|"是"| POP_INFO["弹出提示：<br/>检测正在运行中"]
+    CHECK_RUNNING -->|"否"| PREP_WORKER["清空旧记录和日志<br/>读取用户填写的区间信息<br/>创建检测工作线程"]
+
+    PREP_WORKER --> THREAD_START["启动检测线程<br/>在后台独立运行<br/>不阻塞界面操作"]
+
+    THREAD_START --> LOAD_YOLO["加载 YOLO 目标检测模型"]
+    LOAD_YOLO --> LOAD_OCR["加载 PaddleOCR 文字识别模型"]
+    LOAD_OCR --> SCAN_DIR["扫描图像文件夹<br/>按文件名自然排序<br/>得到待处理图像列表"]
+    SCAN_DIR --> IMG_LOOP{"逐张取出图像<br/>还有下一张？"}
+
+    IMG_LOOP -->|"已全部处理完<br/>或收到停止指令"| DETECT_END["检测结束<br/>恢复开始按钮可点击"]
+
+    IMG_LOOP -->|"是，处理下一张"| DUP_CHECK{"这张图像<br/>之前处理过？"}
+    DUP_CHECK -->|"处理过"| IMG_LOOP
+    DUP_CHECK -->|"没处理过"| READ_IMG["读取图像文件到内存"]
+
+    READ_IMG -->|"读取失败"| IMG_LOOP
+    READ_IMG -->|"读取成功"| YOLO_DETECT["YOLO 模型对图像<br/>进行目标检测<br/>按置信度和IoU阈值过滤"]
+
+    YOLO_DETECT --> FOREACH_BOX{"逐个分析检测框<br/>属于哪种目标？"}
+
+    FOREACH_BOX -->|"轨枕（class_0）"| SLEEPER_FLOW["记录本帧所有轨枕框的面积<br/>找出最大轨枕框面积<br/>过滤掉面积小于50%的小框"]
+    FOREACH_BOX -->|"喷号（class_1）"| SPRAY_FLOW["裁剪喷号区域<br/>用OCR识别文字<br/>清洗识别结果<br/>解析上下行和公里标"]
+    FOREACH_BOX -->|"其他未知类别"| IGNORE["标记为未知<br/>不做后续处理"]
+
+    SLEEPER_FLOW --> SLEEPER_JUDGE{"轨枕框面积<br/>≥ 阈值（最大框×50%）？"}
+    SLEEPER_JUDGE -->|"是"| VALID_SLEEPER["标记为有效轨枕<br/>画绿色检测框<br/>有效计数+1"]
+    SLEEPER_JUDGE -->|"否"| SMALL_SLEEPER["标记为过小轨枕<br/>画灰色检测框<br/>不参与计数"]
+
+    SPRAY_FLOW --> OCR_RESULT{"OCR 识别到<br/>有效喷号文字？"}
+    OCR_RESULT -->|"识别成功"| PARSE_SPRAY["解析喷号格式<br/>提取：上下行方向<br/>公里标数值<br/>计数值"]
+    OCR_RESULT -->|"识别失败"| KEEP_OLD["沿用上一帧的<br/>定位信息"]
+
+    PARSE_SPRAY --> UPDATE_POS["更新当前定位：<br/>行车方向、公里标<br/>累计计数值归零重算"]
+
+    VALID_SLEEPER --> CALC_COUNT["计算本帧计数值：<br/>有效轨枕数 ÷ 2"]
+    SMALL_SLEEPER --> CALC_COUNT
+    UPDATE_POS --> CALC_COUNT
+    KEEP_OLD --> CALC_COUNT
+
+    CALC_COUNT --> SPRAY_CHECK{"本帧是否识别到<br/>有效喷号？"}
+    SPRAY_CHECK -->|"没有"| ACCUM_COUNT["累计计数值<br/>累加本帧计数值"]
+    SPRAY_CHECK -->|"有"| USE_SPRAY["累计计数值<br/>直接使用喷号中的值"]
+
+    ACCUM_COUNT --> DRAW_OVERLAY
+    USE_SPRAY --> DRAW_OVERLAY
+
+    DRAW_OVERLAY["在图像上叠加信息条<br/>显示：累计计数 / 有效轨枕数<br/>区间位置 / 公里标"]
+    DRAW_OVERLAY --> SEND_RESULT["将处理结果发送给界面：<br/>① 标注后的图像 → 左侧显示区<br/>② 定位状态数据 → 右侧状态栏<br/>③ 记录数据 → 右侧记录表格"]
+    SEND_RESULT --> PAUSE["短暂等待 30ms<br/>让界面有时间刷新"]
+    PAUSE --> IMG_LOOP
+
+    SEND_RESULT -.->|"图像更新"| SHOW_IMG["左侧显示区刷新<br/>展示带检测框<br/>和定位信息的图像"]
+    SEND_RESULT -.->|"状态刷新"| SHOW_STATUS["右侧状态栏更新：<br/>累计计数值<br/>有效/原始轨枕数<br/>行车方向 / 区间<br/>公里标 / 修正计数值<br/>OCR识别文本<br/>各类别检测数量"]
+    SEND_RESULT -.->|"记录追加"| ADD_ROW["记录表格末尾<br/>新增一行：<br/>时间戳 / 图像名<br/>记录类型 / 置信度<br/>方向 / 区间 / 公里标<br/>计数值详情"]
+
+    STOP_SIGNAL --> IMG_LOOP
