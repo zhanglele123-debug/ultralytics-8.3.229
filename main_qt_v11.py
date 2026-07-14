@@ -1,13 +1,12 @@
-# -*- coding: utf-8 -*-
 """
 地铁巡检定位验证系统
-适配你的YOLO模型类别：class_0=轨枕, class_1=喷号
+适配你的YOLO模型类别：class_0=轨枕, class_1=喷号.
 """
 
+import csv
 import os
 import re
 import sys
-import csv
 import time
 import traceback
 import warnings
@@ -15,17 +14,27 @@ import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 import cv2
-import numpy as np
-
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QPushButton, QFileDialog,
-    QHBoxLayout, QVBoxLayout, QGridLayout, QGroupBox, QLineEdit, QComboBox,
-    QDoubleSpinBox, QTableWidget, QTableWidgetItem, QTextEdit, QMessageBox,
-    QHeaderView
+    QApplication,
+    QDoubleSpinBox,
+    QFileDialog,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
-
 
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
 
@@ -34,12 +43,12 @@ SLEEPER_AREA_RATIO_THRES = 0.50
 
 
 def current_timestamp_ms() -> str:
-    """返回13位毫秒时间戳，便于表格记录和导出。"""
+    """返回13位毫秒时间戳，便于表格记录和导出。."""
     return str(int(time.time() * 1000))
 
 
 def natural_sort_key(path_or_name):
-    """文件名自然排序，避免10.jpg排在2.jpg前面"""
+    """文件名自然排序，避免10.jpg排在2.jpg前面."""
     name = os.path.basename(str(path_or_name))
     stem, ext = os.path.splitext(name)
 
@@ -58,17 +67,34 @@ def natural_sort_key(path_or_name):
 
 
 def normalize_spray_text(text: str) -> str:
-    """清洗OCR字符串，保留字母数字"""
+    """清洗OCR字符串，保留字母数字."""
     if text is None:
         return ""
 
     text = str(text).upper()
 
     replace_map = {
-        "O": "0", "I": "1", "L": "1", "Z": "2", "B": "8",
-        " ": "", "\n": "", "\t": "", "-": "", "_": "", ".": "",
-        ":": "", "：": "", "+": "", "$": "", "￥": "", "#": "",
-        "*": "", "/": "", "\\": "", "|": "",
+        "O": "0",
+        "I": "1",
+        "L": "1",
+        "Z": "2",
+        "B": "8",
+        " ": "",
+        "\n": "",
+        "\t": "",
+        "-": "",
+        "_": "",
+        ".": "",
+        ":": "",
+        "：": "",
+        "+": "",
+        "$": "",
+        "￥": "",
+        "#": "",
+        "*": "",
+        "/": "",
+        "\\": "",
+        "|": "",
     }
 
     for k, v in replace_map.items():
@@ -79,7 +105,7 @@ def normalize_spray_text(text: str) -> str:
 
 
 def parse_spray_number(text: str):
-    """解析喷号，支持S/X/K前缀"""
+    """解析喷号，支持S/X/K前缀."""
     clean = normalize_spray_text(text)
 
     # 格式1：S/X + 可选K + 两位公里标 + 四位计数值
@@ -92,10 +118,15 @@ def parse_spray_number(text: str):
         full_text = match.group(0)
 
         return {
-            "raw": text, "clean": clean,
-            "direction_prefix": direction_prefix, "direction": direction,
-            "full_text": full_text, "km": km, "km_text": f"K{km:02d}",
-            "count_value": count_value, "count_text": f"{count_value:04d}",
+            "raw": text,
+            "clean": clean,
+            "direction_prefix": direction_prefix,
+            "direction": direction,
+            "full_text": full_text,
+            "km": km,
+            "km_text": f"K{km:02d}",
+            "count_value": count_value,
+            "count_text": f"{count_value:04d}",
         }
 
     # 格式2：只有K前缀
@@ -106,17 +137,22 @@ def parse_spray_number(text: str):
         full_text = match.group(0)
 
         return {
-            "raw": text, "clean": clean,
-            "direction_prefix": "", "direction": None,
-            "full_text": full_text, "km": km, "km_text": f"K{km:02d}",
-            "count_value": count_value, "count_text": f"{count_value:04d}",
+            "raw": text,
+            "clean": clean,
+            "direction_prefix": "",
+            "direction": None,
+            "full_text": full_text,
+            "km": km,
+            "km_text": f"K{km:02d}",
+            "count_value": count_value,
+            "count_text": f"{count_value:04d}",
         }
 
     return None
 
 
 def to_overlay_ascii(text: str) -> str:
-    """转换为OpenCV支持的ASCII文本"""
+    """转换为OpenCV支持的ASCII文本."""
     if text is None:
         return ""
     text = str(text).replace("上行", "UP").replace("下行", "DOWN")
@@ -127,7 +163,7 @@ def to_overlay_ascii(text: str) -> str:
 
 
 def class_name_from_result(names, cls_id: int) -> str:
-    """兼容不同版本Ultralytics的类别名格式"""
+    """兼容不同版本Ultralytics的类别名格式."""
     try:
         if isinstance(names, dict):
             return str(names.get(cls_id, cls_id))
@@ -139,7 +175,7 @@ def class_name_from_result(names, cls_id: int) -> str:
 
 
 def safe_crop(img, box, pad=6):
-    """安全裁剪喷号区域"""
+    """安全裁剪喷号区域."""
     h, w = img.shape[:2]
     x1, y1, x2, y2 = map(int, box)
     x1 = max(0, x1 - pad)
@@ -152,19 +188,16 @@ def safe_crop(img, box, pad=6):
 
 
 def bbox_area(box):
-    """计算检测框面积"""
+    """计算检测框面积."""
     x1, y1, x2, y2 = map(int, box)
     return max(0, x2 - x1) * max(0, y2 - y1)
 
 
 def draw_box(img, box, label, color):
-    """绘制检测框"""
+    """绘制检测框."""
     x1, y1, x2, y2 = map(int, box)
     cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
-    cv2.putText(
-        img, str(label), (x1, max(20, y1 - 8)),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA
-    )
+    cv2.putText(img, str(label), (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA)
 
 
 class DetectionWorker(QThread):
@@ -204,9 +237,10 @@ class DetectionWorker(QThread):
         self.running = False
 
     def load_models(self):
-        """加载YOLO和PP-OCR"""
+        """加载YOLO和PP-OCR."""
         try:
             from ultralytics import YOLO
+
             self.model = YOLO(self.model_path)
             self.log_signal.emit(f"YOLO模型加载完成：{self.model_path}")
         except Exception as e:
@@ -214,6 +248,7 @@ class DetectionWorker(QThread):
 
         try:
             from paddleocr import PaddleOCR
+
             self.ocr = PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
             self.log_signal.emit("PP-OCR加载完成")
         except Exception as e:
@@ -221,7 +256,7 @@ class DetectionWorker(QThread):
             self.log_signal.emit(f"PP-OCR加载失败：{e}")
 
     def list_sources(self):
-        """读取图像文件夹并排序"""
+        """读取图像文件夹并排序."""
         if not os.path.isdir(self.source_path):
             raise ValueError("当前版本只支持选择图像文件夹")
 
@@ -268,7 +303,7 @@ class DetectionWorker(QThread):
             self.finished_signal.emit()
 
     def run_ocr(self, crop):
-        """对喷号裁剪图运行OCR"""
+        """对喷号裁剪图运行OCR."""
         if crop is None or crop.size == 0 or self.ocr is None:
             return ""
 
@@ -289,7 +324,7 @@ class DetectionWorker(QThread):
             return ""
 
     def process_frame(self, frame, image_name=""):
-        """核心处理：适配你的模型类别（class_0=轨枕, class_1=喷号）"""
+        """核心处理：适配你的模型类别（class_0=轨枕, class_1=喷号）."""
         show_img = frame.copy()
 
         result = self.model.predict(frame, conf=self.conf_thres, iou=self.iou_thres, verbose=False)[0]
@@ -387,13 +422,23 @@ class DetectionWorker(QThread):
             f"累计{self.current_count_value:04d} / 喷号{spray_text}"
         )
 
-        self.record_signal.emit([
-            current_timestamp_ms(), image_name, "+".join(record_type_parts), conf_text,
-            self.current_direction, self.current_section, f"K{self.current_km:02d}", count_text
-        ])
+        self.record_signal.emit(
+            [
+                current_timestamp_ms(),
+                image_name,
+                "+".join(record_type_parts),
+                conf_text,
+                self.current_direction,
+                self.current_section,
+                f"K{self.current_km:02d}",
+                count_text,
+            ]
+        )
 
         # 叠加显示文本
-        dir_for_overlay = "UP" if self.current_direction == "上行" else "DOWN" if self.current_direction == "下行" else "UNKNOWN"
+        dir_for_overlay = (
+            "UP" if self.current_direction == "上行" else "DOWN" if self.current_direction == "下行" else "UNKNOWN"
+        )
         section_for_overlay = to_overlay_ascii(self.current_section)
         spray_for_overlay = parsed_spray["full_text"] if parsed_spray is not None else self.last_valid_spray
 
@@ -409,12 +454,19 @@ class DetectionWorker(QThread):
 
         # 发送状态信号
         status = {
-            "image_name": image_name, "total_count_value": self.total_count_value,
-            "raw_sleeper_box_count": raw_sleeper_box_count, "valid_sleeper_box_count": valid_sleeper_box_count,
-            "frame_count_value": frame_count_value, "direction": self.current_direction,
-            "section": self.current_section, "km": self.current_km, "count_value": self.current_count_value,
-            "ocr_text": self.last_ocr_text, "valid_spray": self.last_valid_spray,
-            "detect_count": detect_count, "sleeper_area_threshold": sleeper_area_threshold
+            "image_name": image_name,
+            "total_count_value": self.total_count_value,
+            "raw_sleeper_box_count": raw_sleeper_box_count,
+            "valid_sleeper_box_count": valid_sleeper_box_count,
+            "frame_count_value": frame_count_value,
+            "direction": self.current_direction,
+            "section": self.current_section,
+            "km": self.current_km,
+            "count_value": self.current_count_value,
+            "ocr_text": self.last_ocr_text,
+            "valid_spray": self.last_valid_spray,
+            "detect_count": detect_count,
+            "sleeper_area_threshold": sleeper_area_threshold,
         }
 
         self.status_signal.emit(status)
@@ -458,7 +510,9 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout()
         self.image_label = QLabel("请选择YOLO权重和图像文件夹")
         self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setStyleSheet("background-color:#111827; color:#e5f0ff; font-size:20px; border: 2px solid #2f80ed; border-radius: 10px;")
+        self.image_label.setStyleSheet(
+            "background-color:#111827; color:#e5f0ff; font-size:20px; border: 2px solid #2f80ed; border-radius: 10px;"
+        )
         self.image_label.setMinimumSize(880, 640)
 
         btn_layout = QGridLayout()
@@ -485,7 +539,9 @@ class MainWindow(QMainWindow):
 
         self.path_label = QLabel("模型：未选择\n输入：未选择")
         self.path_label.setWordWrap(True)
-        self.path_label.setStyleSheet("background:#ffffff; border:1px solid #c7d7e8; border-radius:6px; padding:6px; color:#425466;")
+        self.path_label.setStyleSheet(
+            "background:#ffffff; border:1px solid #c7d7e8; border-radius:6px; padding:6px; color:#425466;"
+        )
 
         left_layout.addWidget(self.image_label)
         left_layout.addLayout(btn_layout)
@@ -554,16 +610,18 @@ class MainWindow(QMainWindow):
             name_label.setStyleSheet("color:#496579;")
             status_layout.addWidget(name_label, i, 0)
             widget.setWordWrap(True)
-            widget.setStyleSheet("background:#f8fbff; border:1px solid #d6e1ee; border-radius:4px; padding:3px; color:#0f3b5f;")
+            widget.setStyleSheet(
+                "background:#f8fbff; border:1px solid #d6e1ee; border-radius:4px; padding:3px; color:#0f3b5f;"
+            )
             status_layout.addWidget(widget, i, 1)
         status_group.setLayout(status_layout)
 
         table_group = QGroupBox("巡检定位记录")
         table_layout = QVBoxLayout()
         self.table = QTableWidget(0, 8)
-        self.table.setHorizontalHeaderLabels([
-            "时间戳", "图像", "记录类型", "置信度", "行车方向", "站间区间", "公里标", "计数值"
-        ])
+        self.table.setHorizontalHeaderLabels(
+            ["时间戳", "图像", "记录类型", "置信度", "行车方向", "站间区间", "公里标", "计数值"]
+        )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
@@ -587,7 +645,9 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
 
     def choose_model(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择YOLO权重文件", "", "YOLO Weights (*.pt *.onnx *.engine);;All Files (*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择YOLO权重文件", "", "YOLO Weights (*.pt *.onnx *.engine);;All Files (*)"
+        )
         if path:
             self.model_path = path
             self.update_path_label()
@@ -625,9 +685,11 @@ class MainWindow(QMainWindow):
         }
 
         self.worker = DetectionWorker(
-            model_path=self.model_path, source_path=self.source_path,
-            conf_thres=float(self.spin_conf.value()), iou_thres=float(self.spin_iou.value()),
-            tcms_info=tcms_info
+            model_path=self.model_path,
+            source_path=self.source_path,
+            conf_thres=float(self.spin_conf.value()),
+            iou_thres=float(self.spin_iou.value()),
+            tcms_info=tcms_info,
         )
         self.worker.frame_signal.connect(self.update_frame)
         self.worker.status_signal.connect(self.update_status)
@@ -696,7 +758,10 @@ class MainWindow(QMainWindow):
                 headers = [self.table.horizontalHeaderItem(i).text() for i in range(self.table.columnCount())]
                 writer.writerow(headers)
                 for r in range(self.table.rowCount()):
-                    row = [self.table.item(r, c).text() if self.table.item(r, c) else "" for c in range(self.table.columnCount())]
+                    row = [
+                        self.table.item(r, c).text() if self.table.item(r, c) else ""
+                        for c in range(self.table.columnCount())
+                    ]
                     writer.writerow(row)
             QMessageBox.information(self, "完成", f"已导出：{path}")
         except Exception as e:
